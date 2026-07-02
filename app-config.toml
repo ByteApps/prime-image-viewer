@@ -1,0 +1,17 @@
+# Foundation application configuration
+app-name = "prime-image-viewer"
+friendly-app-name = "Image Viewer"
+launcher-app-name = "Image Viewer"
+description = "Browse Internal, Airlock and USB storage and view images (PNG, JPEG, GIF, BMP), decoded on-device."
+icon = "resources/icon.svg"
+app-id = "0x988aac0ad65fbe18e81b990df411b873"
+version = "0.1.0"
+min-keyos-version = "1.0.0"
+
+[publisher]
+name = ""
+contact-email = ""
+support-url = ""
+
+[permissions]
+template = ["gui-app", "fs-read", "fs-access-read"]

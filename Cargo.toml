@@ -1,0 +1,20 @@
+[package]
+name = "prime-image-viewer"
+version = "0.1.0"
+edition = "2021"
+
+[workspace]
+
+[dependencies]
+log = "0.4"
+# Pure-Rust image decoding (png / zune-jpeg / gif / bmp — no C, no rayon), so
+# it cross-compiles to armv7a-unknown-xous-elf like hayro does in prime-pdf-viewer.
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "bmp"] }
+log-server = { package = "xous-api-log", path = "/Users/user/.foundation/sdk/current/lib/keyos/xous/api/log" }
+server = { path = "/Users/user/.foundation/sdk/current/lib/keyos/server" }
+slint-keyos-platform = { path = "/Users/user/.foundation/sdk/current/lib/keyos/slint-keyos-platform/runtime" }
+foundation-themes = { path = "/Users/user/.foundation/sdk/current/lib/keyos/sdk/crates/foundation-themes" }
+
+[build-dependencies]
+foundation-themes = { path = "/Users/user/.foundation/sdk/current/lib/keyos/sdk/crates/foundation-themes" }
+slint-keyos-platform-build = { path = "/Users/user/.foundation/sdk/current/lib/keyos/slint-keyos-platform/build" }

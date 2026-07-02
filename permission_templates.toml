@@ -1,0 +1,64 @@
+# Read-path file operations only (a viewer never writes). Trimmed from the
+# stock fs-generic template: no Write/Truncate/SetLen/Remove/Rename/Create ops.
+[fs-read]
+"os/fs" = [
+    "OpenDirMessage",
+    "OpenFileMessage",
+    "CloseFile",
+    "CloseDir",
+    "ReadFile",
+    "SeekFile",
+    "GetMetadata",
+    "NextEntry",
+    "AsyncRead",
+]
+[i2c]
+"os/i2c" = [
+    "ClaimPeripheral",
+    "SingleTransfer",
+]
+[gpio]
+"os/gpio" = [
+    "ClaimPin",
+    "EnableIrq",
+    "SetPin",
+    "GetPin",
+]
+[gui-app]
+"os/fs" = [
+    "OpenDirMessage",
+    "CloseDir",
+    "NextEntry",
+    "MapFileMessage",
+    "GetMetadata",
+]
+"os/gui-server" = [
+    "RegisterAppMessage",
+    "RequestRedraw",
+    "AnimateNextFrame",
+    "SubmitFrame",
+    "UpdateKeyboard",
+    "HideKeyboard",
+    "ShowModal",
+]
+"os/settings" = [
+    "GetSystemTheme",
+    "SubscribeSystemTheme",
+    "GetDebugTouch",
+    "SubscribeDebugTouch",
+]
+[navigable]
+"os/gui-server" = [
+    "GetPendingNavRequest",
+    "FinishResponse",
+    "NavigationCancel",
+]
+# Per-location kernel access grants, read-only. fs-read lets the app *call*
+# read ops; these let the kernel grant read access to each Location
+# (Internal/User, Airlock, USB). See ../docs/05-capabilities-permissions.md.
+[fs-access-read]
+"os/fs" = [
+    "GetUserReadAccess",
+    "GetAirlockReadAccess",
+    "GetUsbReadAccess",
+]
