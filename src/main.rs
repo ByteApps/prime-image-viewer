@@ -1,13 +1,15 @@
 mod theme;
 
 use std::cell::RefCell;
-use std::io::Read;
+use std::io::{Cursor, Read};
 use std::rc::Rc;
+use std::time::Duration;
 
+use image::AnimationDecoder;
 use slint_keyos_platform::app_ui;
 use slint_keyos_platform::fs::{self, Location, OpenFlags};
 use slint_keyos_platform::slint::{
-    ComponentHandle, Image, ModelRc, Rgba8Pixel, SharedPixelBuffer, VecModel,
+    ComponentHandle, Image, ModelRc, Rgba8Pixel, SharedPixelBuffer, Timer, TimerMode, VecModel,
 };
 
 app_ui!("prime-image-viewer");
@@ -22,6 +24,10 @@ const MAX_IMG_HEIGHT: u32 = 4096;
 /// File extensions the browser lists and the viewer decodes.
 const IMAGE_EXTS: [&str; 5] = [".png", ".jpg", ".jpeg", ".gif", ".bmp"];
 
+/// Cap on decoded GIF frames, to bound memory (frames are held scaled,
+/// RGBA8: a full-width 440x330 frame is ~580 KB).
+const MAX_GIF_FRAMES: usize = 64;
+
 /// Mutable app state shared across the UI callbacks.
 struct State {
     location: Location,
@@ -29,6 +35,11 @@ struct State {
     images: Vec<String>, // image file names in `path`, in display order
     img_idx: usize,      // index into `images` of the image on screen
     viewing: bool,       // true while the viewer screen is up
+    // Decoded frames of the on-screen image, scaled for display. One entry
+    // for static images; animated GIFs hold every frame and `anim_timer`
+    // cycles `frame_idx` through them.
+    frames: Vec<SharedPixelBuffer<Rgba8Pixel>>,
+    frame_idx: usize,
 }
 
 fn is_image_name(name: &str) -> bool {
@@ -50,7 +61,11 @@ fn app_main(cx: AppContext, ui: AppWindow) {
         images: Vec::new(),
         img_idx: 0,
         viewing: false,
+        frames: Vec::new(),
+        frame_idx: 0,
     }));
+    // Drives animated GIF playback; show_image() (re)starts or stops it.
+    let anim_timer = Rc::new(Timer::default());
 
     // Re-list the current directory (folders + images) into the Browser global.
     let refresh: Rc<dyn Fn()> = {
@@ -145,6 +160,7 @@ fn app_main(cx: AppContext, ui: AppWindow) {
         let state = state.clone();
         let ui_weak = ui_weak.clone();
         let refresh = refresh.clone();
+        let anim_timer = anim_timer.clone();
         callbacks.on_entry_activated(move |name, is_folder| {
             let Some(ui) = ui_weak.upgrade() else { return };
 
@@ -164,11 +180,8 @@ fn app_main(cx: AppContext, ui: AppWindow) {
                 .iter()
                 .position(|n| n == name.as_str())
                 .unwrap_or(0);
-            {
-                let mut s = state.borrow_mut();
-                s.img_idx = idx;
-            }
-            if show_image(&fs, &ui, &state.borrow()) {
+            state.borrow_mut().img_idx = idx;
+            if show_image(&fs, &ui, &state, &anim_timer) {
                 show_info(&ui, "");
                 state.borrow_mut().viewing = true;
                 ui.global::<Ui>().set_viewing(true);
@@ -193,14 +206,17 @@ fn app_main(cx: AppContext, ui: AppWindow) {
     {
         let state = state.clone();
         let ui_weak = ui_weak.clone();
+        let anim_timer = anim_timer.clone();
         callbacks.on_close_viewer(move || {
             log::info!("cb: close-viewer");
+            anim_timer.stop();
             let mut s = state.borrow_mut();
             s.viewing = false;
             s.img_idx = 0;
+            s.frames.clear(); // drop the decoded pixels
+            s.frame_idx = 0;
             if let Some(ui) = ui_weak.upgrade() {
-                let viewer = ui.global::<Viewer>();
-                viewer.set_img(Image::default()); // drop the decoded pixels
+                ui.global::<Viewer>().set_img(Image::default());
                 ui.global::<Ui>().set_viewing(false);
             }
         });
@@ -211,13 +227,20 @@ fn app_main(cx: AppContext, ui: AppWindow) {
         let fs = fs.clone();
         let state = state.clone();
         let ui_weak = ui_weak.clone();
+        let anim_timer = anim_timer.clone();
         callbacks.on_prev_image(move || {
             log::info!("cb: prev-image");
             let Some(ui) = ui_weak.upgrade() else { return };
-            let mut s = state.borrow_mut();
-            if s.viewing && s.img_idx > 0 {
-                s.img_idx -= 1;
-                show_image(&fs, &ui, &s);
+            let step = {
+                let mut s = state.borrow_mut();
+                let ok = s.viewing && s.img_idx > 0;
+                if ok {
+                    s.img_idx -= 1;
+                }
+                ok
+            };
+            if step {
+                show_image(&fs, &ui, &state, &anim_timer);
             }
         });
     }
@@ -225,13 +248,20 @@ fn app_main(cx: AppContext, ui: AppWindow) {
         let fs = fs.clone();
         let state = state.clone();
         let ui_weak = ui_weak.clone();
+        let anim_timer = anim_timer.clone();
         callbacks.on_next_image(move || {
             log::info!("cb: next-image");
             let Some(ui) = ui_weak.upgrade() else { return };
-            let mut s = state.borrow_mut();
-            if s.viewing && s.img_idx + 1 < s.images.len() {
-                s.img_idx += 1;
-                show_image(&fs, &ui, &s);
+            let step = {
+                let mut s = state.borrow_mut();
+                let ok = s.viewing && s.img_idx + 1 < s.images.len();
+                if ok {
+                    s.img_idx += 1;
+                }
+                ok
+            };
+            if step {
+                show_image(&fs, &ui, &state, &anim_timer);
             }
         });
     }
@@ -239,20 +269,34 @@ fn app_main(cx: AppContext, ui: AppWindow) {
     ui.run().expect("UI running");
 }
 
-/// Read + decode the current image, scale it to fit the screen width, and
-/// push it into the Viewer global. On failure shows the error banner and
-/// returns false (the browser stays usable, as in prime-pdf-viewer).
+/// Read + decode the current image (every frame, for animated GIFs), scale
+/// to fit the screen width, push the first frame into the Viewer global, and
+/// start the animation timer when there is more than one frame. On failure
+/// shows the error banner and returns false (the browser stays usable, as in
+/// prime-pdf-viewer).
 fn show_image(
     fs: &fs::FileSystem<fs_permissions::FileSystemPermissions>,
     ui: &AppWindow,
-    st: &State,
+    state: &Rc<RefCell<State>>,
+    anim_timer: &Rc<Timer>,
 ) -> bool {
-    let Some(name) = st.images.get(st.img_idx) else {
-        return false;
-    };
-    let full = join_path(&st.path, name);
+    anim_timer.stop();
 
-    let bytes = match read_bytes(fs, &full, st.location) {
+    let (name, full, loc, pos, count) = {
+        let s = state.borrow();
+        let Some(name) = s.images.get(s.img_idx) else {
+            return false;
+        };
+        (
+            name.clone(),
+            join_path(&s.path, name),
+            s.location,
+            s.img_idx + 1,
+            s.images.len(),
+        )
+    };
+
+    let bytes = match read_bytes(fs, &full, loc) {
         Ok(b) => b,
         Err(msg) => {
             show_error(ui, msg);
@@ -262,18 +306,10 @@ fn show_image(
 
     // Decoders are pure Rust and shouldn't panic, but a panic here would take
     // the whole app down — contain it (same policy as prime-pdf-viewer).
-    let decoded = std::panic::catch_unwind(|| {
-        image::load_from_memory(&bytes).map(|img| {
-            let img = if img.width() > IMG_WIDTH || img.height() > MAX_IMG_HEIGHT {
-                img.resize(IMG_WIDTH, MAX_IMG_HEIGHT, image::imageops::FilterType::Triangle)
-            } else {
-                img
-            };
-            img.into_rgba8()
-        })
-    });
-    let rgba = match decoded {
-        Ok(Ok(rgba)) => rgba,
+    let decoded =
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| decode_frames(&name, &bytes)));
+    let (frames, delay) = match decoded {
+        Ok(Ok(v)) => v,
         Ok(Err(e)) => {
             log::warn!("open-image failed: {e:?}");
             show_error(
@@ -290,28 +326,93 @@ fn show_image(
         }
     };
 
-    let (w, h) = (rgba.width(), rgba.height());
-    let mut buf = SharedPixelBuffer::<Rgba8Pixel>::new(w, h);
-    buf.make_mut_bytes().copy_from_slice(rgba.as_raw());
-
+    let (w, h) = (frames[0].width(), frames[0].height());
     // Displayed height at the fit-to-width scale (images narrower than the
     // screen are stretched up to it, matching the PDF viewer's behavior).
     let disp_h = (h as f32) * (IMG_WIDTH as f32) / (w as f32);
+    let frame_count = frames.len();
+
+    {
+        let mut s = state.borrow_mut();
+        s.frames = frames;
+        s.frame_idx = 0;
+    }
 
     let viewer = ui.global::<Viewer>();
-    viewer.set_img(Image::from_rgba8(buf));
+    viewer.set_img(Image::from_rgba8(state.borrow().frames[0].clone()));
     viewer.set_img_h(disp_h);
-    viewer.set_img_num(st.img_idx as i32 + 1);
-    viewer.set_img_count(st.images.len() as i32);
+    viewer.set_img_num(pos as i32);
+    viewer.set_img_count(count as i32);
     viewer.set_doc_name(name.as_str().into());
-    log::info!(
-        "rendered image {}/{} {}x{}",
-        st.img_idx + 1,
-        st.images.len(),
-        w,
-        h
-    );
+    log::info!("rendered image {pos}/{count} {w}x{h}");
+
+    if frame_count > 1 {
+        log::info!(
+            "gif: {name} playing {frame_count} frames at {}ms",
+            delay.as_millis()
+        );
+        let ui_weak = ui.as_weak();
+        let st = state.clone();
+        anim_timer.start(TimerMode::Repeated, delay, move || {
+            let Some(ui) = ui_weak.upgrade() else { return };
+            let mut s = st.borrow_mut();
+            if s.frames.len() < 2 {
+                return;
+            }
+            s.frame_idx = (s.frame_idx + 1) % s.frames.len();
+            ui.global::<Viewer>()
+                .set_img(Image::from_rgba8(s.frames[s.frame_idx].clone()));
+        });
+    }
     true
+}
+
+/// Decode `bytes` into display-scaled RGBA frame buffers. Static formats
+/// produce one frame; animated GIFs produce up to MAX_GIF_FRAMES plus the
+/// inter-frame delay (frame 0's delay is used for the whole loop — GIFs with
+/// per-frame delays play at a uniform rate).
+fn decode_frames(
+    name: &str,
+    bytes: &[u8],
+) -> image::ImageResult<(Vec<SharedPixelBuffer<Rgba8Pixel>>, Duration)> {
+    if name.to_lowercase().ends_with(".gif") {
+        let decoder = image::codecs::gif::GifDecoder::new(Cursor::new(bytes))?;
+        let frames = decoder
+            .into_frames()
+            .take(MAX_GIF_FRAMES)
+            .collect::<image::ImageResult<Vec<_>>>()?;
+        if frames.len() > 1 {
+            let delay = Duration::from(frames[0].delay());
+            let delay = if delay.is_zero() {
+                Duration::from_millis(100) // browsers' fallback for 0-delay GIFs
+            } else {
+                delay
+            };
+            let bufs = frames
+                .into_iter()
+                .map(|f| to_display_buffer(image::DynamicImage::ImageRgba8(f.into_buffer())))
+                .collect();
+            return Ok((bufs, delay));
+        }
+        // 0- or 1-frame GIF: decode as a static image below.
+    }
+    let img = image::load_from_memory(bytes)?;
+    Ok((vec![to_display_buffer(img)], Duration::ZERO))
+}
+
+/// Downscale to the display width/height caps (never upscale — small images
+/// are stretched at display time) and convert to a Slint pixel buffer.
+fn to_display_buffer(img: image::DynamicImage) -> SharedPixelBuffer<Rgba8Pixel> {
+    let img = if img.width() > IMG_WIDTH || img.height() > MAX_IMG_HEIGHT {
+        img.resize(IMG_WIDTH, MAX_IMG_HEIGHT, image::imageops::FilterType::Triangle)
+    } else {
+        img
+    };
+    let rgba = img.into_rgba8();
+    let (w, h) = (rgba.width(), rgba.height());
+    let mut buf = SharedPixelBuffer::<Rgba8Pixel>::new(w, h);
+    buf.make_mut_bytes().copy_from_slice(rgba.as_raw());
+    buf
 }
 
 /// Read a whole file; returns a user-facing message on failure.
