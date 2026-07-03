@@ -1,9 +1,22 @@
-# Image Viewer (Passport Prime)
+# Image Viewer — a Passport Prime app
 
-A read-only image viewer for Foundation's Passport Prime, built on KeyOS with
-a Slint UI. Browse Internal / Airlock / USB storage, tap an image (PNG, JPEG,
-GIF, BMP), and flip through the folder's images decoded on-device — animated
-GIFs play — no cloud, no write access.
+A read-only image viewer for Foundation's **Passport Prime**, built as a Rust
+binary with a **Slint** UI on **KeyOS** (Foundation's Rust microkernel on
+Xous). Browse Internal / Airlock / USB storage, tap an image (PNG, JPEG, GIF,
+BMP), and flip through the folder's images decoded on-device — animated GIFs
+play — no cloud, no write access.
+
+<p align="center">
+  <img src="screenshots/browser.png" alt="File browser" width="220">
+  &nbsp;
+  <img src="screenshots/image-one.png" alt="Image one (PNG)" width="220">
+  &nbsp;
+  <img src="screenshots/gif-frame-one.png" alt="GIF frame 1 (animated)" width="220">
+  &nbsp;
+  <img src="screenshots/gif-frame-two.png" alt="GIF frame 2 (animated)" width="220">
+</p>
+
+## Details
 
 - **Decoding**: the [image](https://crates.io/crates/image) crate 0.25 with
   only its pure-Rust decoders enabled (`png`, `jpeg`, `gif`, `bmp`; no rayon),
@@ -17,16 +30,26 @@ GIFs play — no cloud, no write access.
   + screenshot color assertions + log assertions; the GIF test samples the
   screen over time to prove frames actually cycle).
 
-| Browser | Image one (PNG) | GIF frame 1 / frame 2 (animated) |
-| --- | --- | --- |
-| ![browser](screenshots/browser.png) | ![one](screenshots/image-one.png) | ![gif1](screenshots/gif-frame-one.png) ![gif2](screenshots/gif-frame-two.png) |
-
 ## Build & run
 
+Requires the `foundation` CLI (on `PATH` at `~/.foundation/sdk/bin`) and Nix.
+In a non-login shell, source Nix first:
+
 ```bash
-nix develop ~/.foundation/sdk/current --command foundation build   # signed hardware bundle
-nix develop ~/.foundation/sdk/current --command foundation sim     # hosted simulator
+. '/nix/var/nix/profiles/default/etc/profile.d/nix-daemon.sh'
+export PATH="$HOME/.foundation/sdk/bin:$PATH"
 ```
+
+Then, from this directory (via the SDK's Nix dev shell):
+
+```bash
+nix develop ~/.foundation/sdk/current --command foundation sim     # hosted simulator
+nix develop ~/.foundation/sdk/current --command foundation build   # compile + sign a hardware bundle
+```
+
+> **Hardware sideload** (`foundation sideload`) is **not** possible on a retail
+> Prime — it needs dev firmware from Foundation. The simulator is the
+> verification target. See `NOTES.md`.
 
 See `CLAUDE.md` for architecture, and `NOTES.md` for verified build/sim output
 and simulator gotchas.
