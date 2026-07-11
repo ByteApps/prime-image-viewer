@@ -1,58 +1,44 @@
-# <img src="resources/icon.svg" alt="" width="42" align="top" /> Image Viewer — a Passport Prime app
+# <img src="resources/icon.svg" alt="" width="42" align="top" /> Image Viewer
 
-A read-only image viewer for Foundation's **Passport Prime**, built as a Rust
-binary with a **Slint** UI on **KeyOS** (Foundation's Rust microkernel on
-Xous). Browse Internal / Airlock / USB storage, tap an image (PNG, JPEG, GIF,
-BMP), and flip through the folder's images decoded on-device — animated GIFs
-play — no cloud, no write access.
+**Media · Images** — view photos and images on your Passport Prime, decoded entirely on-device.
+
+Wallet QR printouts, diagrams, photos moved over USB — Image Viewer opens them right on your Prime. Browse Internal, Airlock, and USB storage, tap an image, and flip through everything in the folder. PNG, JPEG, GIF, and BMP are all decoded on the device — animated GIFs actually play — with no cloud, no companion app, and no write access: it can look at your files but never touch them.
 
 <p align="center">
   <img src="screenshots/browser.png" alt="File browser" width="220">
   &nbsp;
-  <img src="screenshots/image-one.png" alt="Image one (PNG)" width="220">
+  <img src="screenshots/image-one.png" alt="Image view (PNG)" width="220">
   &nbsp;
-  <img src="screenshots/gif-frame-one.png" alt="GIF frame 1 (animated)" width="220">
+  <img src="screenshots/gif-frame-one.png" alt="Animated GIF, frame 1" width="220">
   &nbsp;
-  <img src="screenshots/gif-frame-two.png" alt="GIF frame 2 (animated)" width="220">
+  <img src="screenshots/gif-frame-two.png" alt="Animated GIF, frame 2" width="220">
 </p>
 
-## Details
+## Features
 
-- **Decoding**: the [image](https://crates.io/crates/image) crate 0.25 with
-  only its pure-Rust decoders enabled (`png`, `jpeg`, `gif`, `bmp`; no rayon),
-  downscaled to fit-to-width; displayed via Slint `Image` from a shared pixel
-  buffer. Animated GIFs are decoded frame-by-frame and cycled with a Slint
-  `Timer`.
-- **Permissions**: read-only file access (`fs-read` + `fs-access-read`
-  templates) — the signed manifest contains no write grants.
-- **Testing**: driven end-to-end in the hosted simulator by
-  `../ui-automation/tests/view-image.sh` and `view-gif.sh` (CoreGraphics taps
-  + screenshot color assertions + log assertions; the GIF test samples the
-  screen over time to prove frames actually cycle).
+- **All three storage locations** — Internal, Airlock, and USB, with folder navigation; the list shows just folders and images.
+- **Four formats** — PNG, JPEG, GIF, and BMP, scaled to fit the screen with drag-panning for tall images.
+- **Animated GIFs play** — decoded frame-by-frame and cycled on-device.
+- **Flip through a folder** — previous/next moves between the folder's images, not just pages of one file.
+- **Strictly read-only** — the app's signed permission manifest contains no write grants at all; it cannot modify, create, or delete anything.
+- **Graceful with bad files** — a corrupt or mislabeled image shows a clear error banner and the app keeps running.
+- **Offline by design** — Prime has no network stack; your images never leave the device.
 
-## Build & run
+## Get it running
 
-Requires the `foundation` CLI (on `PATH` at `~/.foundation/sdk/bin`) and Nix.
-In a non-login shell, source Nix first:
+With the Foundation SDK installed, build and launch in the simulator with:
 
 ```bash
-. '/nix/var/nix/profiles/default/etc/profile.d/nix-daemon.sh'
-export PATH="$HOME/.foundation/sdk/bin:$PATH"
+foundation sim
 ```
 
-Then, from this directory (via the SDK's Nix dev shell):
+See **[DEVELOPMENT.md](DEVELOPMENT.md)** for environment setup, hardware builds, decoding internals, and testing.
 
-```bash
-nix develop ~/.foundation/sdk/current --command foundation sim     # hosted simulator
-nix develop ~/.foundation/sdk/current --command foundation build   # compile + sign a hardware bundle
-```
+## Learn more
 
-> **Hardware sideload** (`foundation sideload`) is **not** possible on a retail
-> Prime — it needs dev firmware from Foundation. The simulator is the
-> verification target. See `NOTES.md`.
-
-See `CLAUDE.md` for architecture, and `NOTES.md` for verified build/sim output
-and simulator gotchas.
+- [DEVELOPMENT.md](DEVELOPMENT.md) — building, running, decoding pipeline, permissions, and testing
+- [THIRD-PARTY.md](THIRD-PARTY.md) — libraries this app is built on
+- [NOTES.md](NOTES.md) — verified build/sim output and simulator gotchas
 
 ## License & disclaimer
 
