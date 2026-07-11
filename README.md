@@ -5,13 +5,11 @@
 Wallet QR printouts, diagrams, photos moved over USB — Image Viewer opens them right on your Prime. Browse Internal, Airlock, and USB storage, tap an image, and flip through everything in the folder. PNG, JPEG, GIF, and BMP are all decoded on the device — animated GIFs actually play — with no cloud, no companion app, and no write access: it can look at your files but never touch them.
 
 <p align="center">
-  <img src="screenshots/browser.png" alt="File browser" width="220">
+  <img src="screenshots/photo-lake.png" alt="Image view" width="280">
   &nbsp;
-  <img src="screenshots/image-one.png" alt="Image view (PNG)" width="220">
+  <img src="screenshots/photo-dunes.png" alt="Flipping through a folder's images" width="280">
   &nbsp;
-  <img src="screenshots/gif-frame-one.png" alt="Animated GIF, frame 1" width="220">
-  &nbsp;
-  <img src="screenshots/gif-frame-two.png" alt="Animated GIF, frame 2" width="220">
+  <img src="screenshots/browser.png" alt="File browser" width="280">
 </p>
 
 ## Features
