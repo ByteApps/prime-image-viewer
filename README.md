@@ -1,4 +1,4 @@
-# Image Viewer — a Passport Prime app
+# <img src="resources/icon.svg" alt="" width="42" align="top" /> Image Viewer — a Passport Prime app
 
 A read-only image viewer for Foundation's **Passport Prime**, built as a Rust
 binary with a **Slint** UI on **KeyOS** (Foundation's Rust microkernel on
