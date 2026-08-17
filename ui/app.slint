@@ -266,5 +266,47 @@ export component AppWindow inherits Window {
             if !Ui.viewing: BrowserView {}
             if Ui.viewing: ViewerView {}
         }
+
+        // Full-screen loading overlay: shown while a decode is in flight.
+        // Nested inside the root Rectangle (not a Window-level sibling) and a
+        // TouchArea covering it swallows every tap so a debounced re-tap
+        // can't queue up behind the blocking work.
+        if Ui.loading: Rectangle {
+            x: 0;
+            y: 0;
+            width: parent.width;
+            height: parent.height;
+            background: Theme.palette-foreground.with-alpha(0.55);
+
+            TouchArea {
+                x: 0;
+                y: 0;
+                width: parent.width;
+                height: parent.height;
+            }
+
+            Rectangle {
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+                width: 280px;
+                height: 88px;
+                border-radius: Theme.radius-md;
+                background: Theme.palette-card;
+                border-width: 1px;
+                border-color: Theme.palette-border;
+
+                Text {
+                    x: 16px;
+                    y: (parent.height - self.height) / 2;
+                    width: parent.width - 32px;
+                    text: Ui.loading-text;
+                    color: Theme.palette-foreground;
+                    font-family: "Montserrat";
+                    font-size: 15px;
+                    horizontal-alignment: center;
+                    wrap: word-wrap;
+                }
+            }
+        }
     }
 }

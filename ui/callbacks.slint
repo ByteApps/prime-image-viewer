@@ -33,6 +33,10 @@ export global Ui {
     in-out property <bool> viewing: false;   // false = browser, true = image viewer
     in property <string> message: "";        // transient info/error banner
     in property <bool> message-error: false; // true = error (red), false = info
+    // Full-screen loading overlay, shown while a decode is in flight so a
+    // second tap can't queue up behind the blocking work.
+    in property <bool> loading: false;
+    in property <string> loading-text: "";
 }
 
 // Callbacks bridged to Rust in main.rs.

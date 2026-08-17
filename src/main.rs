@@ -70,6 +70,11 @@ struct State {
     // cycles `frame_idx` through them.
     frames: Vec<SharedPixelBuffer<Rgba8Pixel>>,
     frame_idx: usize,
+    // True while a decode is in flight (deferred to a single_shot Timer so
+    // the loading overlay paints before the blocking work runs). Guards
+    // entry-activated/next/prev/go-back/close-viewer against a queued-up
+    // re-tap while the UI is frozen doing the decode.
+    busy: bool,
 }
 
 fn is_image_name(name: &str) -> bool {
@@ -93,6 +98,7 @@ fn app_main(cx: AppContext, ui: AppWindow) {
         viewing: false,
         frames: Vec::new(),
         frame_idx: 0,
+        busy: false,
     }));
     // Drives animated GIF playback; show_image() (re)starts or stops it.
     let anim_timer = Rc::new(Timer::default());
@@ -203,19 +209,45 @@ fn app_main(cx: AppContext, ui: AppWindow) {
                 return;
             }
 
-            log::info!("cb: open-image {name}");
-            let idx = state
-                .borrow()
-                .images
-                .iter()
-                .position(|n| n == name.as_str())
-                .unwrap_or(0);
-            state.borrow_mut().img_idx = idx;
-            if show_image(&fs, &ui, &state, &anim_timer) {
-                show_info(&ui, "");
-                state.borrow_mut().viewing = true;
-                ui.global::<Ui>().set_viewing(true);
+            if state.borrow().busy {
+                return;
             }
+
+            log::info!("cb: open-image {name}");
+
+            state.borrow_mut().busy = true;
+            let ui_state = ui.global::<Ui>();
+            ui_state.set_loading(true);
+            ui_state.set_loading_text(format!("Opening {name}…").into());
+            log::info!("loading: {name}");
+
+            // Defer the actual read + decode a tick, so this frame (with the
+            // overlay up) paints before the blocking work runs.
+            let fs = fs.clone();
+            let state = state.clone();
+            let ui_weak = ui_weak.clone();
+            let anim_timer = anim_timer.clone();
+            let name = name.clone();
+            Timer::single_shot(Duration::from_millis(0), move || {
+                let Some(ui) = ui_weak.upgrade() else { return };
+
+                let idx = state
+                    .borrow()
+                    .images
+                    .iter()
+                    .position(|n| n == name.as_str())
+                    .unwrap_or(0);
+                state.borrow_mut().img_idx = idx;
+                if show_image(&fs, &ui, &state, &anim_timer) {
+                    show_info(&ui, "");
+                    state.borrow_mut().viewing = true;
+                    ui.global::<Ui>().set_viewing(true);
+                }
+
+                state.borrow_mut().busy = false;
+                ui.global::<Ui>().set_loading(false);
+                log::info!("loading done");
+            });
         });
     }
 
@@ -224,6 +256,9 @@ fn app_main(cx: AppContext, ui: AppWindow) {
         let state = state.clone();
         let refresh = refresh.clone();
         callbacks.on_go_back(move || {
+            if state.borrow().busy {
+                return;
+            }
             {
                 let mut s = state.borrow_mut();
                 s.path = parent_path(&s.path);
@@ -238,6 +273,9 @@ fn app_main(cx: AppContext, ui: AppWindow) {
         let ui_weak = ui_weak.clone();
         let anim_timer = anim_timer.clone();
         callbacks.on_close_viewer(move || {
+            if state.borrow().busy {
+                return;
+            }
             log::info!("cb: close-viewer");
             anim_timer.stop();
             let mut s = state.borrow_mut();
@@ -259,19 +297,40 @@ fn app_main(cx: AppContext, ui: AppWindow) {
         let ui_weak = ui_weak.clone();
         let anim_timer = anim_timer.clone();
         callbacks.on_prev_image(move || {
+            if state.borrow().busy {
+                return;
+            }
             log::info!("cb: prev-image");
             let Some(ui) = ui_weak.upgrade() else { return };
-            let step = {
+            let (step, target) = {
                 let mut s = state.borrow_mut();
                 let ok = s.viewing && s.img_idx > 0;
                 if ok {
                     s.img_idx -= 1;
                 }
-                ok
+                (ok, s.images.get(s.img_idx).cloned().unwrap_or_default())
             };
-            if step {
-                show_image(&fs, &ui, &state, &anim_timer);
+            if !step {
+                return;
             }
+
+            state.borrow_mut().busy = true;
+            let ui_state = ui.global::<Ui>();
+            ui_state.set_loading(true);
+            ui_state.set_loading_text(format!("Opening {target}…").into());
+            log::info!("loading: {target}");
+
+            let fs = fs.clone();
+            let state = state.clone();
+            let ui_weak = ui_weak.clone();
+            let anim_timer = anim_timer.clone();
+            Timer::single_shot(Duration::from_millis(0), move || {
+                let Some(ui) = ui_weak.upgrade() else { return };
+                show_image(&fs, &ui, &state, &anim_timer);
+                state.borrow_mut().busy = false;
+                ui.global::<Ui>().set_loading(false);
+                log::info!("loading done");
+            });
         });
     }
     {
@@ -280,19 +339,40 @@ fn app_main(cx: AppContext, ui: AppWindow) {
         let ui_weak = ui_weak.clone();
         let anim_timer = anim_timer.clone();
         callbacks.on_next_image(move || {
+            if state.borrow().busy {
+                return;
+            }
             log::info!("cb: next-image");
             let Some(ui) = ui_weak.upgrade() else { return };
-            let step = {
+            let (step, target) = {
                 let mut s = state.borrow_mut();
                 let ok = s.viewing && s.img_idx + 1 < s.images.len();
                 if ok {
                     s.img_idx += 1;
                 }
-                ok
+                (ok, s.images.get(s.img_idx).cloned().unwrap_or_default())
             };
-            if step {
-                show_image(&fs, &ui, &state, &anim_timer);
+            if !step {
+                return;
             }
+
+            state.borrow_mut().busy = true;
+            let ui_state = ui.global::<Ui>();
+            ui_state.set_loading(true);
+            ui_state.set_loading_text(format!("Opening {target}…").into());
+            log::info!("loading: {target}");
+
+            let fs = fs.clone();
+            let state = state.clone();
+            let ui_weak = ui_weak.clone();
+            let anim_timer = anim_timer.clone();
+            Timer::single_shot(Duration::from_millis(0), move || {
+                let Some(ui) = ui_weak.upgrade() else { return };
+                show_image(&fs, &ui, &state, &anim_timer);
+                state.borrow_mut().busy = false;
+                ui.global::<Ui>().set_loading(false);
+                log::info!("loading done");
+            });
         });
     }
 
