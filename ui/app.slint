@@ -213,6 +213,20 @@ component ViewerView inherits Rectangle {
         }
     }
 
+    // A refused image keeps the viewer open, so the reason has to be visible
+    // here and not only on the browser screen.
+    if Viewer.message != "": Text {
+        x: 0;
+        y: 76px;
+        width: parent.width;
+        text: Viewer.message;
+        color: Theme.palette-danger;
+        font-family: "Montserrat";
+        font-size: 14px;
+        wrap: word-wrap;
+        horizontal-alignment: center;
+    }
+
     Flickable {
         x: 0;
         y: 68px;

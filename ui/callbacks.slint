@@ -23,6 +23,9 @@ export global Viewer {
     in property <int> img-count: 0;
     in property <string> doc-name: "";
     in property <length> img-h: 0px;     // displayed image height (logical px)
+    // Non-empty when this image could not be displayed (e.g. it would need
+    // more memory to decode than the app can spend). The viewer stays open.
+    in property <string> message: "";
 }
 
 // Transient UI state: which screen is showing, and the info/error banner.

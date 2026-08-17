@@ -28,6 +28,36 @@ const IMAGE_EXTS: [&str; 5] = [".png", ".jpg", ".jpeg", ".gif", ".bmp"];
 /// RGBA8: a full-width 440x330 frame is ~580 KB).
 const MAX_GIF_FRAMES: usize = 64;
 
+/// Budget for decoding ONE image, checked against the header's dimensions
+/// BEFORE any pixels are decoded.
+///
+/// The file size is no guide at all here. Measured with
+/// `cargo run --release --example mem_probe` (one process per file, peak RSS):
+///
+/// | file          | dimensions | w*h*4    | peak RSS |
+/// |---------------|------------|----------|----------|
+/// | 0.03 MB jpg   | 1000x1000  |   3.8 MB |  13.2 MB |
+/// | 0.17 MB jpg   | 3000x3000  |  34.3 MB |  49.6 MB |
+/// | 0.29 MB jpg   | 4000x4000  |  61.0 MB |  76.5 MB |
+/// | 0.63 MB jpg   | 6000x6000  | 137.3 MB | 147.5 MB |
+///
+/// i.e. peak tracks `w*h*4` plus ~10 MB, so a 290 KB photo can want 76 MB --
+/// the same shape of crash the PDF viewer hit on an 11 MB file. A decode that
+/// exceeds the heap ABORTS the process (no error path, no log), so this
+/// refuses first and shows the numbers.
+///
+/// EMPIRICAL, pending device calibration: KeyOS exposes no per-app heap
+/// budget to read. 24 MB admits a 2400x2400 photo.
+const MAX_DECODED_BYTES: u64 = 24 * 1024 * 1024;
+
+/// Budget for an animation's retained (already downscaled) frames.
+///
+/// Frames are kept for playback, so their cost is the SUM. At the display
+/// width that is ~0.77 MB each, and MAX_GIF_FRAMES of them would be ~49 MB on
+/// its own. Decoding stops when this is reached and the animation plays the
+/// frames that fit, which beats refusing the file or dying on it.
+const MAX_ANIMATION_BYTES: u64 = 12 * 1024 * 1024;
+
 /// Mutable app state shared across the UI callbacks.
 struct State {
     location: Location,
@@ -304,6 +334,41 @@ fn show_image(
         }
     };
 
+    // Pre-flight: the header gives us the dimensions for a few hundred bytes,
+    // and w*h*4 is what the decode will cost. Refuse here, because the decode
+    // itself cannot fail gracefully -- it aborts the process.
+    match image_dimensions(&bytes) {
+        Some((iw, ih)) => {
+            let needed = (iw as u64).saturating_mul(ih as u64).saturating_mul(4);
+            if needed > MAX_DECODED_BYTES {
+                log::warn!(
+                    "{name} is {iw}x{ih}, needs ~{} to decode (limit {})",
+                    human_size(needed),
+                    human_size(MAX_DECODED_BYTES)
+                );
+                let msg = format!(
+                    "This image is {iw}x{ih} — too large to display (needs ~{}).",
+                    human_size(needed)
+                );
+                show_error(ui, msg.clone());
+                // Keep the viewer on THIS image rather than silently leaving
+                // the previous one on screen: the index already advanced, so
+                // without this the app looks like it ignored the tap.
+                let viewer = ui.global::<Viewer>();
+                viewer.set_img(Image::default());
+                viewer.set_img_h(0.0);
+                viewer.set_message(msg.into());
+                viewer.set_doc_name(name.as_str().into());
+                viewer.set_img_num(pos as i32);
+                viewer.set_img_count(count as i32);
+                return false;
+            }
+        }
+        // Unknown format/dimensions: let the decoder produce the real error
+        // rather than guessing. It will fail on the format, not on memory.
+        None => {}
+    }
+
     // Decoders are pure Rust and shouldn't panic, but a panic here would take
     // the whole app down — contain it (same policy as prime-pdf-viewer).
     let decoded =
@@ -339,6 +404,7 @@ fn show_image(
     }
 
     let viewer = ui.global::<Viewer>();
+    viewer.set_message("".into());
     viewer.set_img(Image::from_rgba8(state.borrow().frames[0].clone()));
     viewer.set_img_h(disp_h);
     viewer.set_img_num(pos as i32);
@@ -377,27 +443,52 @@ fn decode_frames(
 ) -> image::ImageResult<(Vec<SharedPixelBuffer<Rgba8Pixel>>, Duration)> {
     if name.to_lowercase().ends_with(".gif") {
         let decoder = image::codecs::gif::GifDecoder::new(Cursor::new(bytes))?;
-        let frames = decoder
-            .into_frames()
-            .take(MAX_GIF_FRAMES)
-            .collect::<image::ImageResult<Vec<_>>>()?;
-        if frames.len() > 1 {
-            let delay = Duration::from(frames[0].delay());
+        // Scale each frame as it arrives and drop the full-resolution buffer
+        // immediately. Collecting the frames first (which this used to do)
+        // holds EVERY frame at full size at once: measured at 179 MB peak for
+        // a 13 MB, 24-frame 1200x1200 GIF, against ~13 MB for the streamed
+        // version. Only one full-res frame is alive at a time now, and the
+        // retained scaled frames are capped by MAX_ANIMATION_BYTES.
+        let mut delay = Duration::ZERO;
+        let mut bufs: Vec<SharedPixelBuffer<Rgba8Pixel>> = Vec::new();
+        let mut retained: u64 = 0;
+        for (i, frame) in decoder.into_frames().take(MAX_GIF_FRAMES).enumerate() {
+            let frame = frame?;
+            if i == 0 {
+                delay = Duration::from(frame.delay());
+            }
+            let buf = to_display_buffer(image::DynamicImage::ImageRgba8(frame.into_buffer()));
+            retained = retained
+                .saturating_add(buf.width() as u64 * buf.height() as u64 * 4);
+            bufs.push(buf);
+            if retained >= MAX_ANIMATION_BYTES {
+                log::warn!("animation truncated at {} frames ({})", bufs.len(), human_size(retained));
+                break;
+            }
+        }
+        if bufs.len() > 1 {
             let delay = if delay.is_zero() {
                 Duration::from_millis(100) // browsers' fallback for 0-delay GIFs
             } else {
                 delay
             };
-            let bufs = frames
-                .into_iter()
-                .map(|f| to_display_buffer(image::DynamicImage::ImageRgba8(f.into_buffer())))
-                .collect();
             return Ok((bufs, delay));
         }
         // 0- or 1-frame GIF: decode as a static image below.
     }
     let img = image::load_from_memory(bytes)?;
     Ok((vec![to_display_buffer(img)], Duration::ZERO))
+}
+
+/// Read just the header to get an image's dimensions, without decoding pixels.
+/// Returns None when the format is unknown or the header is unreadable -- the
+/// decoder then produces the real error.
+fn image_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
+    image::ImageReader::new(Cursor::new(bytes))
+        .with_guessed_format()
+        .ok()?
+        .into_dimensions()
+        .ok()
 }
 
 /// Downscale to the display width/height caps (never upscale — small images
@@ -424,7 +515,12 @@ fn read_bytes(
     let mut file = fs
         .open_file(path, loc, OpenFlags::READ_ONLY)
         .map_err(|e| err_msg(&e))?;
+    let len = file.metadata().map(|m| m.size).unwrap_or(0);
     let mut buf = Vec::new();
+    // `read_to_end` grows by doubling and ABORTS if an allocation fails, which
+    // is a crash with no error path. Reserve the exact size fallibly instead.
+    buf.try_reserve_exact(len as usize)
+        .map_err(|_| "Not enough memory to open this image".to_string())?;
     file.read_to_end(&mut buf)
         .map_err(|_| "Read failed".to_string())?;
     Ok(buf)
