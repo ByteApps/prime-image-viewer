@@ -26,6 +26,12 @@ const MAX_IMG_HEIGHT: u32 = 4096;
 /// File extensions the browser lists and the viewer decodes.
 const IMAGE_EXTS: [&str; 5] = [".png", ".jpg", ".jpeg", ".gif", ".bmp"];
 
+/// Delay before a deferred open/decode runs, so the loading-overlay frame
+/// actually paints first. 0 ms fires on the next event-loop iteration BEFORE
+/// the renderer commits a frame (verified optically in the sim: the screen
+/// kept showing the pre-tap frame through a 10 s GIF decode).
+const LOADING_DEFER_MS: u64 = 50;
+
 /// Cap on decoded GIF frames, to bound memory (frames are held scaled,
 /// RGBA8: a full-width 440x330 frame is ~580 KB).
 const MAX_GIF_FRAMES: usize = 64;
@@ -235,14 +241,20 @@ fn app_main(cx: AppContext, ui: AppWindow) {
             ui_state.set_loading_text(format!("Opening {name}…").into());
             log::info!("loading: {name}");
 
-            // Defer the actual read + decode a tick, so this frame (with the
-            // overlay up) paints before the blocking work runs.
+            // Defer the actual read + decode so the frame with the overlay up
+            // paints before the blocking work runs. A 0 ms deferral is NOT
+            // enough on the SDK's platform: the timer fires on the next event
+            // loop iteration, BEFORE the renderer commits a frame, and the
+            // screen keeps showing the pre-tap frame for the whole decode
+            // (observed optically in the sim against a 10 s GIF decode).
+            // 50 ms + an explicit redraw request gives the renderer a window.
             let fs = fs.clone();
             let state = state.clone();
             let ui_weak = ui_weak.clone();
             let anim_timer = anim_timer.clone();
             let name = name.clone();
-            Timer::single_shot(Duration::from_millis(0), move || {
+            ui.window().request_redraw();
+            Timer::single_shot(Duration::from_millis(LOADING_DEFER_MS), move || {
                 let Some(ui) = ui_weak.upgrade() else { return };
 
                 let idx = state
@@ -338,7 +350,8 @@ fn app_main(cx: AppContext, ui: AppWindow) {
             let state = state.clone();
             let ui_weak = ui_weak.clone();
             let anim_timer = anim_timer.clone();
-            Timer::single_shot(Duration::from_millis(0), move || {
+            ui.window().request_redraw();
+            Timer::single_shot(Duration::from_millis(LOADING_DEFER_MS), move || {
                 let Some(ui) = ui_weak.upgrade() else { return };
                 show_image(&fs, &ui, &state, &anim_timer);
                 state.borrow_mut().busy = false;
@@ -380,7 +393,8 @@ fn app_main(cx: AppContext, ui: AppWindow) {
             let state = state.clone();
             let ui_weak = ui_weak.clone();
             let anim_timer = anim_timer.clone();
-            Timer::single_shot(Duration::from_millis(0), move || {
+            ui.window().request_redraw();
+            Timer::single_shot(Duration::from_millis(LOADING_DEFER_MS), move || {
                 let Some(ui) = ui_weak.upgrade() else { return };
                 show_image(&fs, &ui, &state, &anim_timer);
                 state.borrow_mut().busy = false;
