@@ -7,6 +7,8 @@ Direct dependencies of this app. The complete transitive list (with exact versio
 | Library | Version | License | Used for |
 |---|---|---|---|
 | [image](https://crates.io/crates/image) | 0.25 | MIT OR Apache-2.0 | Pure-Rust image decoding (PNG, JPEG, GIF, BMP decoders only) and resizing |
+| [jpeg-decoder](https://crates.io/crates/jpeg-decoder) | 0.3 | MIT OR Apache-2.0 | IDCT-scaled JPEG decode for over-budget images |
+| [png](https://crates.io/crates/png) | 0.18 | MIT OR Apache-2.0 | Row-streamed PNG decode for over-budget images |
 | [log](https://crates.io/crates/log) | 0.4 | MIT OR Apache-2.0 | Logging facade |
 
 ## Foundation SDK / KeyOS platform
