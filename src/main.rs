@@ -6,13 +6,13 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use image::AnimationDecoder;
-use slint_keyos_platform::app_ui;
+use slint_keyos_platform::app_ui2;
 use slint_keyos_platform::fs::{self, Location, OpenFlags};
 use slint_keyos_platform::slint::{
     ComponentHandle, Image, ModelRc, Rgba8Pixel, SharedPixelBuffer, Timer, TimerMode, VecModel,
 };
 
-app_ui!("prime-image-viewer");
+app_ui2!("Image Viewer");
 
 /// Width images are displayed at: the window (480) minus the 20px content
 /// padding on each side, so an image always fits the screen edge to edge.
