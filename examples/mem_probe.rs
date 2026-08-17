@@ -16,7 +16,8 @@
 //! meaning anything:
 //!   - the static-image branch now takes the same scaled-JPEG detour
 //!     `show_image` does (via `jpeg_scaled`, `#[path]`-included below) once
-//!     `w*h*4` exceeds `MAX_DECODED_BYTES`;
+//!     `w*h*4` exceeds `MAX_DECODED_BYTES`, and the same for PNG via
+//!     `png_scaled`;
 //!   - the GIF branch streams frame-by-frame (scale-then-drop, capped by
 //!     `MAX_ANIMATION_BYTES`) instead of collecting every full-res frame
 //!     first -- `decode_frames` switched to this shape to fix a 179 MB peak
@@ -28,10 +29,13 @@ use std::time::Duration;
 
 use image::AnimationDecoder;
 
-// Kept in step with src/jpeg_scaled.rs by literal inclusion (not a copy) --
-// see the module doc comment there for what it does and why.
+// Kept in step with src/jpeg_scaled.rs and src/png_scaled.rs by literal
+// inclusion (not a copy) -- see each module's doc comment for what it does
+// and why.
 #[path = "../src/jpeg_scaled.rs"]
 mod jpeg_scaled;
+#[path = "../src/png_scaled.rs"]
+mod png_scaled;
 
 const IMG_WIDTH: u32 = 440; // must match src/main.rs
 const MAX_IMG_HEIGHT: u32 = 4096; // must match src/main.rs
@@ -120,10 +124,13 @@ fn main() {
             drop(bufs);
             let _ = Duration::ZERO;
         } else {
-            // Mirrors src/main.rs's show_image: an oversize JPEG (w*h*4 over
-            // MAX_DECODED_BYTES) takes the scaled-decode detour instead of
-            // image::load_from_memory's always-full-resolution path.
-            let is_jpeg = name.to_lowercase().ends_with(".jpg") || name.to_lowercase().ends_with(".jpeg");
+            // Mirrors src/main.rs's show_image: an oversize JPEG or PNG
+            // (w*h*4 over MAX_DECODED_BYTES) takes its own scaled-decode
+            // detour instead of image::load_from_memory's always-full-
+            // resolution path.
+            let lower = name.to_lowercase();
+            let is_jpeg = lower.ends_with(".jpg") || lower.ends_with(".jpeg");
+            let is_png = lower.ends_with(".png");
             let needed = w as u64 * h as u64 * 4;
             let img = if is_jpeg && needed > MAX_DECODED_BYTES {
                 match jpeg_scaled::pick_scale(w, h, MAX_DECODED_BYTES) {
@@ -136,6 +143,20 @@ fn main() {
                     },
                     None => {
                         println!("{name}: refused, too large even at 1/8 scale");
+                        continue;
+                    }
+                }
+            } else if is_png && needed > MAX_DECODED_BYTES {
+                match png_scaled::pick_factor(w, h, MAX_DECODED_BYTES) {
+                    Some(k) => match png_scaled::decode_scaled(&bytes, k) {
+                        Ok(img) => img,
+                        Err(e) => {
+                            println!("{name}: decode_scaled failed: {e}");
+                            continue;
+                        }
+                    },
+                    None => {
+                        println!("{name}: refused, too large even at 1/16 scale");
                         continue;
                     }
                 }

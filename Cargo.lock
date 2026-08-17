@@ -4383,6 +4383,7 @@ dependencies = [
  "image",
  "jpeg-decoder",
  "log",
+ "png 0.18.1",
  "server",
  "slint-keyos-platform",
  "slint-keyos-platform-build",

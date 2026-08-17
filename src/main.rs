@@ -1,4 +1,5 @@
 mod jpeg_scaled;
+mod png_scaled;
 mod theme;
 
 use std::cell::RefCell;
@@ -56,8 +57,11 @@ const MAX_GIF_FRAMES: usize = 64;
 /// `jpeg_scaled::pick_scale`/`decode_scaled`, wired in from `show_image`'s
 /// refusal block). Re-measured with the same probe, post-downsample:
 /// 4000x4000 -> 2000x2000 (1/2) peaked at 40.9 MB; 6000x6000 -> 1500x1500
-/// (1/4) peaked at 27.1 MB. Non-JPEG formats (PNG/GIF/BMP have no comparable
-/// scaled-decode API) still refuse exactly as this table describes.
+/// (1/4) peaked at 27.1 MB. PNG gets the same escape hatch via
+/// `png_scaled::pick_factor`/`decode_scaled`, which box-filters down at
+/// read time using the `png` crate's row-streaming API instead of `image`'s
+/// always-full-resolution `load_from_memory`. GIF/BMP have no comparable
+/// scaled-decode API and still refuse exactly as this table describes.
 const MAX_DECODED_BYTES: u64 = 24 * 1024 * 1024;
 
 /// Budget for an animation's retained (already downscaled) frames.
@@ -428,21 +432,29 @@ fn show_image(
     // and w*h*4 is what the decode will cost. Refuse here, because the decode
     // itself cannot fail gracefully -- it aborts the process.
     //
-    // JPEGs get one more chance before refusal: `jpeg_scaled::pick_scale`
-    // looks for an IDCT scale (1/2, 1/4, 1/8) whose output fits the budget,
-    // and if it finds one, `downsample_target` routes the decode below
-    // through `jpeg_scaled::decode_scaled` instead of the full-resolution
-    // `image::load_from_memory` path. Every other format (and any JPEG
-    // where even 1/8 doesn't fit) refuses exactly as before.
+    // JPEGs and PNGs each get one more chance before refusal:
+    // `jpeg_scaled::pick_scale` looks for an IDCT scale (1/2, 1/4, 1/8) whose
+    // output fits the budget, and `png_scaled::pick_factor` looks for a
+    // box-filter factor k (2..=16) whose output fits. Whichever finds one
+    // routes the decode below through its own `decode_scaled` instead of the
+    // full-resolution `image::load_from_memory` path. Every other format
+    // (and any JPEG/PNG where even the most aggressive scale doesn't fit)
+    // refuses exactly as before.
     let mut downsample_target: Option<(u32, u32)> = None;
+    let mut png_downsample_factor: Option<u32> = None;
     match image_dimensions_and_format(&bytes) {
         Some((iw, ih, fmt)) => {
             let needed = (iw as u64).saturating_mul(ih as u64).saturating_mul(4);
             if needed > MAX_DECODED_BYTES {
                 if fmt == image::ImageFormat::Jpeg {
                     downsample_target = jpeg_scaled::pick_scale(iw, ih, MAX_DECODED_BYTES);
+                } else if fmt == image::ImageFormat::Png {
+                    png_downsample_factor = png_scaled::pick_factor(iw, ih, MAX_DECODED_BYTES);
                 }
-                match downsample_target {
+                let scaled_dims = downsample_target.or_else(|| {
+                    png_downsample_factor.map(|k| ((iw + k - 1) / k, (ih + k - 1) / k))
+                });
+                match scaled_dims {
                     Some((tw, th)) => {
                         log::info!("downsampled {iw}x{ih} -> {tw}x{th}");
                     }
@@ -484,6 +496,9 @@ fn show_image(
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             if let Some((tw, th)) = downsample_target {
                 let img = jpeg_scaled::decode_scaled(&bytes, tw, th)?;
+                Ok((vec![to_display_buffer(img)], Duration::ZERO))
+            } else if let Some(k) = png_downsample_factor {
+                let img = png_scaled::decode_scaled(&bytes, k)?;
                 Ok((vec![to_display_buffer(img)], Duration::ZERO))
             } else {
                 decode_frames(&name, &bytes).map_err(|e| e.to_string())
@@ -592,7 +607,21 @@ fn decode_frames(
         }
         // 0- or 1-frame GIF: decode as a static image below.
     }
-    let img = image::load_from_memory(bytes)?;
+    // Belt-and-braces on top of the pre-flight refusal in `show_image`: if a
+    // file's header lied about its dimensions (or a format's own encoded
+    // size estimate is off), `image::load_from_memory` would allocate
+    // unboundedly and ABORT the process on failure -- no error path. Route
+    // through `ImageReader` with an explicit `max_alloc` instead, so an
+    // over-budget allocation fails as a graceful decode error. The limit is
+    // deliberately more generous than `MAX_DECODED_BYTES` (which pre-flight
+    // already enforces against the HEADER's dimensions): this is a backstop
+    // against a lying header, not a second copy of the same budget, so it
+    // allows headroom for a decoder's internal scratch buffers.
+    let mut reader = image::ImageReader::new(Cursor::new(bytes)).with_guessed_format()?;
+    let mut limits = image::Limits::default();
+    limits.max_alloc = Some(2 * MAX_DECODED_BYTES + 16 * 1024 * 1024);
+    reader.limits(limits);
+    let img = reader.decode()?;
     Ok((vec![to_display_buffer(img)], Duration::ZERO))
 }
 
