@@ -1,3 +1,4 @@
+mod jpeg_scaled;
 mod theme;
 
 use std::cell::RefCell;
@@ -48,6 +49,15 @@ const MAX_GIF_FRAMES: usize = 64;
 ///
 /// EMPIRICAL, pending device calibration: KeyOS exposes no per-app heap
 /// budget to read. 24 MB admits a 2400x2400 photo.
+///
+/// The 4000x4000 and 6000x6000 rows above are what a FULL-resolution decode
+/// would have cost -- since `jpeg_scaled` shipped, a JPEG over this budget no
+/// longer hits that fate: it's downsampled at IDCT time instead (see
+/// `jpeg_scaled::pick_scale`/`decode_scaled`, wired in from `show_image`'s
+/// refusal block). Re-measured with the same probe, post-downsample:
+/// 4000x4000 -> 2000x2000 (1/2) peaked at 40.9 MB; 6000x6000 -> 1500x1500
+/// (1/4) peaked at 27.1 MB. Non-JPEG formats (PNG/GIF/BMP have no comparable
+/// scaled-decode API) still refuse exactly as this table describes.
 const MAX_DECODED_BYTES: u64 = 24 * 1024 * 1024;
 
 /// Budget for an animation's retained (already downscaled) frames.
@@ -417,31 +427,50 @@ fn show_image(
     // Pre-flight: the header gives us the dimensions for a few hundred bytes,
     // and w*h*4 is what the decode will cost. Refuse here, because the decode
     // itself cannot fail gracefully -- it aborts the process.
-    match image_dimensions(&bytes) {
-        Some((iw, ih)) => {
+    //
+    // JPEGs get one more chance before refusal: `jpeg_scaled::pick_scale`
+    // looks for an IDCT scale (1/2, 1/4, 1/8) whose output fits the budget,
+    // and if it finds one, `downsample_target` routes the decode below
+    // through `jpeg_scaled::decode_scaled` instead of the full-resolution
+    // `image::load_from_memory` path. Every other format (and any JPEG
+    // where even 1/8 doesn't fit) refuses exactly as before.
+    let mut downsample_target: Option<(u32, u32)> = None;
+    match image_dimensions_and_format(&bytes) {
+        Some((iw, ih, fmt)) => {
             let needed = (iw as u64).saturating_mul(ih as u64).saturating_mul(4);
             if needed > MAX_DECODED_BYTES {
-                log::warn!(
-                    "{name} is {iw}x{ih}, needs ~{} to decode (limit {})",
-                    human_size(needed),
-                    human_size(MAX_DECODED_BYTES)
-                );
-                let msg = format!(
-                    "This image is {iw}x{ih} — too large to display (needs ~{}).",
-                    human_size(needed)
-                );
-                show_error(ui, msg.clone());
-                // Keep the viewer on THIS image rather than silently leaving
-                // the previous one on screen: the index already advanced, so
-                // without this the app looks like it ignored the tap.
-                let viewer = ui.global::<Viewer>();
-                viewer.set_img(Image::default());
-                viewer.set_img_h(0.0);
-                viewer.set_message(msg.into());
-                viewer.set_doc_name(name.as_str().into());
-                viewer.set_img_num(pos as i32);
-                viewer.set_img_count(count as i32);
-                return false;
+                if fmt == image::ImageFormat::Jpeg {
+                    downsample_target = jpeg_scaled::pick_scale(iw, ih, MAX_DECODED_BYTES);
+                }
+                match downsample_target {
+                    Some((tw, th)) => {
+                        log::info!("downsampled {iw}x{ih} -> {tw}x{th}");
+                    }
+                    None => {
+                        log::warn!(
+                            "{name} is {iw}x{ih}, needs ~{} to decode (limit {})",
+                            human_size(needed),
+                            human_size(MAX_DECODED_BYTES)
+                        );
+                        let msg = format!(
+                            "This image is {iw}x{ih} — too large to display (needs ~{}).",
+                            human_size(needed)
+                        );
+                        show_error(ui, msg.clone());
+                        // Keep the viewer on THIS image rather than silently
+                        // leaving the previous one on screen: the index
+                        // already advanced, so without this the app looks
+                        // like it ignored the tap.
+                        let viewer = ui.global::<Viewer>();
+                        viewer.set_img(Image::default());
+                        viewer.set_img_h(0.0);
+                        viewer.set_message(msg.into());
+                        viewer.set_doc_name(name.as_str().into());
+                        viewer.set_img_num(pos as i32);
+                        viewer.set_img_count(count as i32);
+                        return false;
+                    }
+                }
             }
         }
         // Unknown format/dimensions: let the decoder produce the real error
@@ -451,12 +480,19 @@ fn show_image(
 
     // Decoders are pure Rust and shouldn't panic, but a panic here would take
     // the whole app down — contain it (same policy as prime-pdf-viewer).
-    let decoded =
-        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| decode_frames(&name, &bytes)));
+    let decoded: std::thread::Result<Result<(Vec<SharedPixelBuffer<Rgba8Pixel>>, Duration), String>> =
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            if let Some((tw, th)) = downsample_target {
+                let img = jpeg_scaled::decode_scaled(&bytes, tw, th)?;
+                Ok((vec![to_display_buffer(img)], Duration::ZERO))
+            } else {
+                decode_frames(&name, &bytes).map_err(|e| e.to_string())
+            }
+        }));
     let (frames, delay) = match decoded {
         Ok(Ok(v)) => v,
         Ok(Err(e)) => {
-            log::warn!("open-image failed: {e:?}");
+            log::warn!("open-image failed: {e}");
             show_error(
                 ui,
                 "Couldn't open this file. It may not be an image, or the format is unsupported."
@@ -560,15 +596,18 @@ fn decode_frames(
     Ok((vec![to_display_buffer(img)], Duration::ZERO))
 }
 
-/// Read just the header to get an image's dimensions, without decoding pixels.
-/// Returns None when the format is unknown or the header is unreadable -- the
-/// decoder then produces the real error.
-fn image_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
-    image::ImageReader::new(Cursor::new(bytes))
+/// Read just the header to get an image's dimensions and detected format,
+/// without decoding pixels. Returns None when the format is unknown or the
+/// header is unreadable -- the decoder then produces the real error. The
+/// format is what lets `show_image` offer JPEGs (and only JPEGs) the scaled
+/// decode path instead of a flat refusal.
+fn image_dimensions_and_format(bytes: &[u8]) -> Option<(u32, u32, image::ImageFormat)> {
+    let reader = image::ImageReader::new(Cursor::new(bytes))
         .with_guessed_format()
-        .ok()?
-        .into_dimensions()
-        .ok()
+        .ok()?;
+    let fmt = reader.format()?;
+    let (w, h) = reader.into_dimensions().ok()?;
+    Some((w, h, fmt))
 }
 
 /// Downscale to the display width/height caps (never upscale — small images

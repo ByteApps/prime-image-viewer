@@ -12,6 +12,13 @@ log = "0.4"
 # Pure-Rust image decoding (png / zune-jpeg / gif / bmp — no C, no rayon), so
 # it cross-compiles to armv7a-unknown-xous-elf like hayro does in prime-pdf-viewer.
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "bmp"] }
+# Scaled JPEG decode (image/zune-jpeg has no such API): lets an oversize JPEG
+# be downsampled at IDCT time instead of refused outright. default-features
+# MUST stay off -- its default `rayon` feature would break the pure-Rust
+# device tree the same way a stray rand/getrandom bump would (see the
+# workspace RANDOMNESS-AUDIT). Verify with `cargo tree -i rayon` after any
+# version bump here.
+jpeg-decoder = { version = "0.3", default-features = false, features = ["platform_independent"] }
 log-server = { package = "xous-api-log", path = "../keyos-sdk/lib/keyos/xous/api/log" }
 server = { path = "../keyos-sdk/lib/keyos/server" }
 slint-keyos-platform = { path = "../keyos-sdk/lib/keyos/slint-keyos-platform/runtime" }
