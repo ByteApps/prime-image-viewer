@@ -41,6 +41,6 @@ slint-keyos-platform-build = { path = "../keyos-sdk/lib/keyos/slint-keyos-platfo
 # coefficient row when the single-core producer outruns the worker threads
 # (~3 bytes/pixel: 108 MB for a 6000x6000 photo) and OOM the Prime's 128 MB
 # pool with an uncatchable crash. Found 2026-08-19 via the img-6000.jpg
-# calibration crash; to be filed upstream against image-rs/jpeg-decoder.
+# calibration crash; filed upstream: image-rs/jpeg-decoder#290.
 [patch.crates-io]
 jpeg-decoder = { path = "vendor/jpeg-decoder" }
