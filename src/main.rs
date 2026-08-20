@@ -54,8 +54,16 @@ const MAX_GIF_FRAMES: usize = 64;
 /// exceeds the heap ABORTS the process (no error path, no log), so this
 /// refuses first and shows the numbers.
 ///
-/// EMPIRICAL, pending device calibration: KeyOS exposes no per-app heap
-/// budget to read. 24 MB admits a 2400x2400 photo.
+/// CALIBRATED against real hardware 2026-08-19: the device has 128 MB of
+/// RAM total (`keyos/src/lib.rs` RAM_SIZE) for kernel + every service +
+/// all resident apps, and a 6000x6000 JPEG killed the app ("Out of
+/// physical memory for PID 39", first-touch demand paging) even though its
+/// 1/4-scaled decode models at only ~21 MB under the device's own
+/// never-shrinks dlmalloc. The app pool is small enough that a 20-30 MB
+/// spike lives or dies on boot-state margin. 8 MB keeps the worst
+/// device-model footprint under ~7 MB (measured with a dlmalloc-backed
+/// probe), and costs nothing visibly: the display is 440 px wide, so even
+/// a 1/8-scaled 6000px source arrives >= 750 px.
 ///
 /// The 4000x4000 and 6000x6000 rows above are what a FULL-resolution decode
 /// would have cost -- since `jpeg_scaled` shipped, a JPEG over this budget no
@@ -68,7 +76,7 @@ const MAX_GIF_FRAMES: usize = 64;
 /// read time using the `png` crate's row-streaming API instead of `image`'s
 /// always-full-resolution `load_from_memory`. GIF/BMP have no comparable
 /// scaled-decode API and still refuse exactly as this table describes.
-const MAX_DECODED_BYTES: u64 = 24 * 1024 * 1024;
+const MAX_DECODED_BYTES: u64 = 8 * 1024 * 1024;
 
 /// Budget for an animation's retained (already downscaled) frames.
 ///
@@ -657,7 +665,14 @@ fn image_dimensions_and_format(bytes: &[u8]) -> Option<(u32, u32, image::ImageFo
 /// are stretched at display time) and convert to a Slint pixel buffer.
 fn to_display_buffer(img: image::DynamicImage) -> SharedPixelBuffer<Rgba8Pixel> {
     let img = if img.width() > IMG_WIDTH || img.height() > MAX_IMG_HEIGHT {
-        img.resize(IMG_WIDTH, MAX_IMG_HEIGHT, image::imageops::FilterType::Triangle)
+        // thumbnail(), not resize(): resize's two-pass Triangle filter
+        // allocates a full-height f32 RGBA intermediate — the single biggest
+        // allocation in the whole decode pipeline (10-13 MB for the scaled
+        // calibration fixtures, more than the decode itself). thumbnail's
+        // box filter allocates only the output, and the source is already
+        // >= 2x oversampled for the 440 px display, so the quality
+        // difference is invisible here.
+        img.thumbnail(IMG_WIDTH, MAX_IMG_HEIGHT)
     } else {
         img
     };

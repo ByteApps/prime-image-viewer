@@ -7,7 +7,7 @@ icon = "resources/icon.svg"
 theme = "resources/theme.json"
 signing-identity = "byteapps"
 app-id = "0x988aac0ad65fbe18e81b990df411b873"
-version = "1.0.0"
+version = "1.0.2"
 min-keyos-version = "1.0.0"
 
 [publisher]

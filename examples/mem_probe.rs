@@ -40,7 +40,7 @@ mod png_scaled;
 const IMG_WIDTH: u32 = 440; // must match src/main.rs
 const MAX_IMG_HEIGHT: u32 = 4096; // must match src/main.rs
 const MAX_GIF_FRAMES: usize = 64; // must match src/main.rs
-const MAX_DECODED_BYTES: u64 = 24 * 1024 * 1024; // must match src/main.rs
+const MAX_DECODED_BYTES: u64 = 8 * 1024 * 1024; // must match src/main.rs
 const MAX_ANIMATION_BYTES: u64 = 12 * 1024 * 1024; // must match src/main.rs
 
 fn peak_rss() -> u64 {
@@ -163,7 +163,7 @@ fn main() {
             } else {
                 image::load_from_memory(&bytes).unwrap()
             };
-            let scaled = img.resize(IMG_WIDTH, MAX_IMG_HEIGHT, image::imageops::FilterType::Triangle);
+            let scaled = img.thumbnail(IMG_WIDTH, MAX_IMG_HEIGHT);
             let rgba = scaled.into_rgba8();
             let peak = peak_rss();
             println!(
