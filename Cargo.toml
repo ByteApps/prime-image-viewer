@@ -41,6 +41,10 @@ slint-keyos-platform-build = { path = "../keyos-sdk/lib/keyos/slint-keyos-platfo
 # coefficient row when the single-core producer outruns the worker threads
 # (~3 bytes/pixel: 108 MB for a 6000x6000 photo) and OOM the Prime's 128 MB
 # pool with an uncatchable crash. Found 2026-08-19 via the img-6000.jpg
-# calibration crash; filed upstream: image-rs/jpeg-decoder#290.
+# calibration crash. Upstream image-rs/jpeg-decoder#290 was CLOSED
+# won't-fix (crate is maintenance-mode; image-rs is moving to zune-jpeg),
+# so this patch is PERMANENT. zune-jpeg is NOT a drop-in: it has no
+# reduced-IDCT scaled decode (etemesi254/zune-image#434, open) -- the sole
+# reason jpeg-decoder is vendored here. Keep it until #434 lands.
 [patch.crates-io]
 jpeg-decoder = { path = "vendor/jpeg-decoder" }
