@@ -4375,7 +4375,7 @@ dependencies = [
 
 [[package]]
 name = "prime-image-viewer"
-version = "0.1.0"
+version = "1.0.2"
 dependencies = [
  "foundation-themes",
  "image",
